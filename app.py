@@ -1,17 +1,59 @@
 import streamlit as st
 import pandas as pd
+import joblib
+from io import StringIO
+from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
-import numpy as np
 
-# --- USER CREDENTIALS ---
+# =========================
+# Embedded CSV as string
+# =========================
+csv_data = """Age,Gender,family_history,work_interfere,no_employees,remote_work,tech_company,benefits,care_options,wellness_program,seek_help,risk
+...PUT_YOUR_SURVEY_DATA_HERE...
+"""
+
+# Load the embedded dataset
+df = pd.read_csv(StringIO(csv_data))
+
+# =========================
+# User login credentials
+# =========================
 USER_CREDENTIALS = {
-    "admin": "password123",  # Change this for security
+    "admin": "password123"
 }
 
-# --- LOGIN FUNCTION ---
+# =========================
+# Train model on the embedded data
+# =========================
+@st.cache_resource
+def train_model():
+    X = df.drop("risk", axis=1)
+    y = df["risk"]
+
+    categorical_features = X.select_dtypes(include=["object"]).columns
+    numeric_features = X.select_dtypes(exclude=["object"]).columns
+
+    preprocessor = ColumnTransformer([
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_features),
+        ("num", "passthrough", numeric_features)
+    ])
+
+    clf = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", RandomForestClassifier(random_state=42, class_weight="balanced"))
+    ])
+
+    clf.fit(X, y)
+    return clf
+
+model = train_model()
+
+# =========================
+# Login function
+# =========================
 def login():
     st.title("🔑 Login")
     username = st.text_input("Username")
@@ -24,88 +66,47 @@ def login():
         else:
             st.error("❌ Invalid username or password")
 
-# --- SESSION STATE ---
+# =========================
+# Streamlit app main
+# =========================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
-# --- TRAIN MODEL FUNCTION ---
-@st.cache_resource
-def train_model():
-    # Load dataset from file in app folder
-    df = pd.read_csv("survey.csv")
-
-    # Prepare target
-    df = df.dropna(subset=['treatment'])
-    df['treatment'] = df['treatment'].map({'Yes': 1, 'No': 0})
-
-    # Define features
-    features = ['Age', 'Gender', 'family_history', 'work_interfere', 'no_employees',
-                'remote_work', 'tech_company', 'benefits', 'care_options',
-                'wellness_program', 'seek_help']
-    target = 'treatment'
-
-    X = df[features]
-    y = df[target]
-
-    categorical_cols = X.select_dtypes(include=['object']).columns.tolist()
-    numeric_cols = X.select_dtypes(exclude=['object']).columns.tolist()
-
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('categorical', OneHotEncoder(handle_unknown='ignore'), categorical_cols),
-            ('numeric', 'passthrough', numeric_cols)
-        ]
-    )
-
-    model = RandomForestClassifier(class_weight='balanced', random_state=42)
-
-    pipeline = Pipeline(steps=[
-        ('preprocessor', preprocessor),
-        ('classifier', model)
-    ])
-
-    pipeline.fit(X, y)
-    return pipeline
-
-# --- MAIN APP ---
 if not st.session_state.logged_in:
     login()
 else:
-    # Train model inside Streamlit Cloud
-    model = train_model()
-
     st.title("🧠 Mental Health Risk Predictor")
-    st.markdown("Answer the questions below to check your mental health risk.")
 
-    # Form inputs
-    age = st.number_input("Age", min_value=0, max_value=100, value=25)
-    gender = st.selectbox("Gender", ["Male", "Female", "Other"])
-    family_history = st.selectbox("Family History of Mental Illness?", ["Yes", "No"])
-    work_interfere = st.selectbox("Does work interfere with your mental health?", ["Never", "Rarely", "Sometimes", "Often"])
-    no_employees = st.selectbox("Number of Employees in Company", ["1-5", "6-25", "26-100", "100-500", "500-1000", "More than 1000"])
-    remote_work = st.selectbox("Do you work remotely?", ["Yes", "No"])
-    tech_company = st.selectbox("Is it a tech company?", ["Yes", "No"])
-    benefits = st.selectbox("Does your employer provide mental health benefits?", ["Yes", "No", "Don't know"])
-    care_options = st.selectbox("Are care options available?", ["Yes", "No", "Not sure"])
-    wellness_program = st.selectbox("Wellness program available?", ["Yes", "No", "Don't know"])
-    seek_help = st.selectbox("Is help-seeking encouraged?", ["Yes", "No", "Don't know"])
+    # Collect user input
+    age = st.number_input("Age", min_value=10, max_value=100, step=1)
+    gender = st.selectbox("Gender", df["Gender"].unique())
+    family_history = st.selectbox("Family History", df["family_history"].unique())
+    work_interfere = st.selectbox("Work Interfere", df["work_interfere"].unique())
+    no_employees = st.selectbox("No. of Employees", df["no_employees"].unique())
+    remote_work = st.selectbox("Remote Work", df["remote_work"].unique())
+    tech_company = st.selectbox("Tech Company", df["tech_company"].unique())
+    benefits = st.selectbox("Benefits", df["benefits"].unique())
+    care_options = st.selectbox("Care Options", df["care_options"].unique())
+    wellness_program = st.selectbox("Wellness Program", df["wellness_program"].unique())
+    seek_help = st.selectbox("Seek Help", df["seek_help"].unique())
 
-    # Prediction
     if st.button("Predict Risk"):
-        input_data = [[age, gender, family_history, work_interfere, no_employees,
-                       remote_work, tech_company, benefits, care_options,
-                       wellness_program, seek_help]]
+        input_df = pd.DataFrame([{
+            "Age": age,
+            "Gender": gender,
+            "family_history": family_history,
+            "work_interfere": work_interfere,
+            "no_employees": no_employees,
+            "remote_work": remote_work,
+            "tech_company": tech_company,
+            "benefits": benefits,
+            "care_options": care_options,
+            "wellness_program": wellness_program,
+            "seek_help": seek_help
+        }])
 
-        prediction = model.predict(input_data)[0]
-        proba = model.predict_proba(input_data)[0]
-
-        risk_label = "High Risk" if prediction == 1 else "Low Risk"
-        confidence = round(proba[prediction] * 100, 2)
-
-        st.subheader(f"🩺 Prediction: {risk_label}")
-        st.write(f"Confidence: **{confidence}%**")
-
+        prediction = model.predict(input_df)[0]
         if prediction == 1:
-            st.warning("⚠️ Consider seeking professional advice or support.")
+            st.error("🔴 High Risk of Mental Health Issues")
         else:
-            st.success("✅ You appear at low risk based on the information provided.")
+            st.success("🟢 Low Risk of Mental Health Issues")
